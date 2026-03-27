@@ -175,6 +175,12 @@ def live_packets(sock: socket.socket):
             register_stream(sock)
 
 
+def proxy_packets(sock: socket.socket):
+    """Yield (data, addr) from a socket receiving forwarded packets (no registration)."""
+    while True:
+        yield sock.recvfrom(65535)
+
+
 def replay_packets(pcap_file: str, speed: float = 0.0):
     """Yield (data, addr) by replaying stream packets from a pcap via tshark."""
     log(f"Replaying {pcap_file} (speed={'realtime' if speed else 'max'})")
@@ -325,6 +331,55 @@ def run(packets, is_live: bool = False, skip_dirty: bool = False,
 
 
 # ---------------------------------------------------------------------------
+# proxy display loop (receives complete JPEGs, no reassembly)
+# ---------------------------------------------------------------------------
+
+def run_proxy(sock: socket.socket) -> None:
+    frames  = 0
+    failed  = 0
+    t_stat  = time.time()
+
+    while True:
+        data, _ = sock.recvfrom(65535)
+
+        if data[:2] != b"\xff\xd8":
+            failed += 1
+            continue
+
+        _suppress_stderr()
+        frame = cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_COLOR)
+        _restore_stderr()
+
+        if frame is None:
+            failed += 1
+            continue
+
+        frames += 1
+        h, w = frame.shape[:2]
+
+        if frames == 1:
+            log(f"Streaming {w}x{h}")
+        elif frames % 100 == 0:
+            elapsed = time.time() - t_stat
+            fps = 100 / elapsed if elapsed > 0 else 0
+            log(f"{w}x{h} | {fps:.1f} fps | {len(data)//1024}K | frames={frames} failed={failed}")
+            t_stat = time.time()
+
+        cv2.imshow("W05A Microscope", frame)
+
+        key = cv2.waitKey(1) & 0xFF
+        if key == ord("q"):
+            break
+        if key == ord("s"):
+            fname = f"frame_{frames:05d}.png"
+            cv2.imwrite(fname, frame)
+            log(f"Saved {fname}")
+
+    log(f"Done — frames={frames} failed={failed}")
+    cv2.destroyAllWindows()
+
+
+# ---------------------------------------------------------------------------
 # entry point
 # ---------------------------------------------------------------------------
 
@@ -340,12 +395,23 @@ def main() -> None:
                         help="replay speed (1.0 = realtime, 0 = max)")
     parser.add_argument("--skip-dirty", action="store_true",
                         help="drop frames with missing packets (cleaner but lower fps)")
+    parser.add_argument("--proxy", action="store_true",
+                        help="proxy mode: skip registration/heartbeat, just listen for forwarded packets")
     args = parser.parse_args()
 
     skip_dirty = getattr(args, 'skip_dirty', False)
 
     if args.replay:
         run(replay_packets(args.replay, speed=args.speed), skip_dirty=skip_dirty)
+        return
+
+    if args.proxy:
+        log("Proxy mode — listening for complete JPEG frames on port %d" % STREAM_RX)
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+            sock.bind(("", STREAM_RX))
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 2 * 1024 * 1024)
+            log("Keys: Q = quit, S = save frame")
+            run_proxy(sock)
         return
 
     log("Connecting to W05A microscope...")
