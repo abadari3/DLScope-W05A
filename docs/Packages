@@ -1,14 +1,14 @@
 Package: com.abadari3.dlscope
-Version: 1.0-2+debug
+Version: 1.0-3+debug
 Architecture: iphoneos-arm
 Maintainer: Ananda Badari
-Installed-Size: 100
+Installed-Size: 116
 Depends: firmware (>= 6.0)
-Filename: debs/com.abadari3.dlscope_1.0-2+debug_iphoneos-arm.deb
-Size: 34174
-MD5sum: 6deb60b42015e34d8446a60fb73369e6
-SHA1: e20466b2e191f8cb441362c31b39f27eddb647af
-SHA256: 266447b9e5e52cb488e02f407001343e8ec1ea796dc321c387b102556d21eb04
+Filename: debs/com.abadari3.dlscope_1.0-3+debug_iphoneos-arm.deb
+Size: 34910
+MD5sum: 65ea1eb49e0c22b96a110b7f86ddd39d
+SHA1: 912f1d896c69a64eb30b69e04803f18816193255
+SHA256: 533e38162dca8ba98a56016b2028294befe9915f58e287f07f3f56f60a4d6784
 Section: Multimedia
 Description: W05A WiFi Microscope Viewer
 Author: Ananda Badari

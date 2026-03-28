@@ -173,10 +173,6 @@ static UIImage *decodeJPEG(const uint8_t *bytes, size_t length) {
 
 - (void)dealloc {
     [self stop];
-    [_streamThread release];
-    [_hbThread release];
-    [_pendingFrame release];
-    [super dealloc];
 }
 
 - (void)start {
@@ -219,28 +215,22 @@ static UIImage *decodeJPEG(const uint8_t *bytes, size_t length) {
 }
 
 - (void)notifyStatus:(NSString *)status {
-    [status retain];
     dispatch_async(dispatch_get_main_queue(), ^{
         [self.delegate microscopeDidUpdateStatus:status];
-        [status release];
     });
 }
 
 - (void)notifyFrame:(UIImage *)image {
     // Pending frame slot: always keep only the latest frame.
     // If main thread hasn't consumed the previous one, it gets replaced.
-    [image retain];
-    [_pendingFrame release];
     _pendingFrame = image;
 
     if (!_frameDispatched) {
         _frameDispatched = YES;
         dispatch_async(dispatch_get_main_queue(), ^{
-            // Grab whatever the latest frame is right now
-            UIImage *latest = [_pendingFrame retain];
+            UIImage *latest = _pendingFrame;
             _frameDispatched = NO;
             [self.delegate microscopeDidReceiveFrame:latest];
-            [latest release];
         });
     }
 }
@@ -248,151 +238,140 @@ static UIImage *decodeJPEG(const uint8_t *bytes, size_t length) {
 #pragma mark - Heartbeat
 
 - (void)heartbeatLoop {
-    NSAutoreleasePool *pool = [[NSAutoreleasePool alloc] init];
+    @autoreleasepool {
+        uint8_t buf[256];
+        struct timeval tv;
+        tv.tv_sec = 1;
+        tv.tv_usec = 0;
+        setsockopt(_hbSock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
 
-    uint8_t buf[256];
-    struct timeval tv;
-    tv.tv_sec = 1;
-    tv.tv_usec = 0;
-    setsockopt(_hbSock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
-
-    while (_running) {
-        ssize_t n = recvfrom(_hbSock, buf, sizeof(buf), 0, NULL, NULL);
-        if (n >= 4 && memcmp(buf, kMagic, 4) == 0) {
-            sendEmptyToMicroscope(_hbSock, HB_PORT);
-            // Hardware snap button: byte 8 transitions from 0 to 1
-            if (n > 8) {
-                uint8_t btn = buf[8];
-                if (btn == 1 && _lastSnapBtn == 0) {
-                    dispatch_async(dispatch_get_main_queue(), ^{
-                        if ([self.delegate respondsToSelector:@selector(microscopeDidPressSnapButton)]) {
-                            [self.delegate microscopeDidPressSnapButton];
-                        }
-                    });
+        while (_running) {
+            ssize_t n = recvfrom(_hbSock, buf, sizeof(buf), 0, NULL, NULL);
+            if (n >= 4 && memcmp(buf, kMagic, 4) == 0) {
+                sendEmptyToMicroscope(_hbSock, HB_PORT);
+                // Hardware snap button: byte 8 transitions from 0 to 1
+                if (n > 8) {
+                    uint8_t btn = buf[8];
+                    if (btn == 1 && _lastSnapBtn == 0) {
+                        dispatch_async(dispatch_get_main_queue(), ^{
+                            if ([self.delegate respondsToSelector:@selector(microscopeDidPressSnapButton)]) {
+                                [self.delegate microscopeDidPressSnapButton];
+                            }
+                        });
+                    }
+                    _lastSnapBtn = btn;
                 }
-                _lastSnapBtn = btn;
             }
         }
     }
-
-    [pool drain];
 }
 
 #pragma mark - Stream
 
 - (void)streamLoop {
-    NSAutoreleasePool *pool = [[NSAutoreleasePool alloc] init];
+    @autoreleasepool {
+        // Pre-allocated C buffers — no NSMutableData overhead or reallocation
+        uint8_t pktBuf[65536];
+        static const size_t kFrameBufCap = 120 * 1024;
+        uint8_t *frameBuf = (uint8_t *)malloc(kFrameBufCap);
+        size_t frameLen = 0;
 
-    // Pre-allocated C buffers — no NSMutableData overhead or reallocation
-    uint8_t pktBuf[65536];
-    static const size_t kFrameBufCap = 120 * 1024;
-    uint8_t *frameBuf = (uint8_t *)malloc(kFrameBufCap);
-    size_t frameLen = 0;
+        uint8_t lastFrameNum = 0;
+        BOOL haveFrame = NO;
+        uint16_t expectIdx = 1;
+        BOOL frameDirty = NO;
+        struct timeval tv;
+        tv.tv_sec = 5;
+        tv.tv_usec = 0;
+        setsockopt(_streamSock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
 
-    uint8_t lastFrameNum = 0;
-    BOOL haveFrame = NO;
-    uint16_t expectIdx = 1;
-    BOOL frameDirty = NO;
-    NSUInteger loopCount = 0;
-    struct timeval tv;
-    tv.tv_sec = 5;
-    tv.tv_usec = 0;
-    setsockopt(_streamSock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+        while (_running) {
+            ssize_t n = recvfrom(_streamSock, pktBuf, sizeof(pktBuf), 0, NULL, NULL);
 
-    while (_running) {
-        ssize_t n = recvfrom(_streamSock, pktBuf, sizeof(pktBuf), 0, NULL, NULL);
-
-        if (n < 0) {
-            // Timeout — check WiFi and re-register
-            if (!isOnMicroscopeWiFi()) {
-                [self notifyStatus:@"Connect to MKL_WIFI network"];
-            } else {
-                [self notifyStatus:@"Timeout - reconnecting..."];
+            if (n < 0) {
+                // Timeout — check WiFi and re-register
+                if (!isOnMicroscopeWiFi()) {
+                    [self notifyStatus:@"Connect to MKL_WIFI network"];
+                } else {
+                    [self notifyStatus:@"Timeout - reconnecting..."];
+                }
+                sendToMicroscope(_cmdSock, makeCmd(0, 1, 1), CMD_PORT);
+                sendToMicroscope(_cmdSock, makeCmd(1, 2, 1), CMD_PORT);
+                sendToMicroscope(_cmdSock, makeStreamRegCmd(), STREAM_REG_PORT);
+                continue;
             }
-            sendToMicroscope(_cmdSock, makeCmd(0, 1, 1), CMD_PORT);
-            sendToMicroscope(_cmdSock, makeCmd(1, 2, 1), CMD_PORT);
-            sendToMicroscope(_cmdSock, makeStreamRegCmd(), STREAM_REG_PORT);
-            continue;
-        }
 
-        // Skip command responses
-        if (n >= 4 && memcmp(pktBuf, kMagic, 4) == 0) {
-            continue;
-        }
+            // Skip command responses
+            if (n >= 4 && memcmp(pktBuf, kMagic, 4) == 0) {
+                continue;
+            }
 
-        if (n <= 16) continue;
+            if (n <= 16) continue;
 
-        uint8_t frameNum = pktBuf[2];
-        uint8_t lastFlag = pktBuf[3];
-        uint16_t pktIdx = pktBuf[4] | (pktBuf[5] << 8);
+            uint8_t frameNum = pktBuf[2];
+            uint8_t lastFlag = pktBuf[3];
+            uint16_t pktIdx = pktBuf[4] | (pktBuf[5] << 8);
 
-        // New frame started before previous finished
-        if (haveFrame && frameNum != lastFrameNum) {
-            frameLen = 0;
+            // New frame started before previous finished
+            if (haveFrame && frameNum != lastFrameNum) {
+                frameLen = 0;
+                expectIdx = 1;
+                frameDirty = NO;
+            }
+            lastFrameNum = frameNum;
+            haveFrame = YES;
+
+            // Detect gaps — mark frame dirty
+            if (pktIdx != expectIdx) {
+                frameDirty = YES;
+            }
+            expectIdx = pktIdx + 1;
+
+            size_t payloadLen = n - 16;
+            if (frameLen + payloadLen <= kFrameBufCap) {
+                memcpy(frameBuf + frameLen, pktBuf + 16, payloadLen);
+                frameLen += payloadLen;
+            } else {
+                frameDirty = YES;
+            }
+
+            if (lastFlag != 1) continue;
+
+            // Frame complete
             expectIdx = 1;
+
+            // Skip dirty frames (missing packets = glitchy JPEG)
+            if (frameDirty) {
+                frameLen = 0;
+                frameDirty = NO;
+                continue;
+            }
             frameDirty = NO;
-        }
-        lastFrameNum = frameNum;
-        haveFrame = YES;
 
-        // Detect gaps — mark frame dirty
-        if (pktIdx != expectIdx) {
-            frameDirty = YES;
-        }
-        expectIdx = pktIdx + 1;
+            if (frameLen < 2 || frameBuf[0] != 0xFF || frameBuf[1] != 0xD8) {
+                frameLen = 0;
+                continue;
+            }
 
-        size_t payloadLen = n - 16;
-        if (frameLen + payloadLen <= kFrameBufCap) {
-            memcpy(frameBuf + frameLen, pktBuf + 16, payloadLen);
-            frameLen += payloadLen;
-        } else {
-            frameDirty = YES;
-        }
+            // Skip decode if main thread hasn't consumed the previous frame yet
+            if (_frameDispatched) {
+                frameLen = 0;
+                continue;
+            }
 
-        if (lastFlag != 1) continue;
-
-        // Frame complete
-        expectIdx = 1;
-
-        // Skip dirty frames (missing packets = glitchy JPEG)
-        if (frameDirty) {
+            UIImage *image = decodeJPEG(frameBuf, frameLen);
             frameLen = 0;
-            frameDirty = NO;
-            continue;
-        }
-        frameDirty = NO;
 
-        if (frameLen < 2 || frameBuf[0] != 0xFF || frameBuf[1] != 0xD8) {
-            frameLen = 0;
-            continue;
+            if (!image) continue;
+
+            [self notifyFrame:image];
         }
 
-        // Skip decode if main thread hasn't consumed the previous frame yet
-        if (_frameDispatched) {
-            frameLen = 0;
-            continue;
-        }
-
-        UIImage *image = decodeJPEG(frameBuf, frameLen);
-        frameLen = 0;
-
-        if (!image) continue;
-
-        [self notifyFrame:image];
-
-        // Drain autorelease pool every 100 frames (very little autoreleased now)
-        loopCount++;
-        if (loopCount % 100 == 0) {
-            [pool drain];
-            pool = [[NSAutoreleasePool alloc] init];
-        }
+        free(frameBuf);
+        if (sDecodeCtx) { CGContextRelease(sDecodeCtx); sDecodeCtx = NULL; }
+        if (sColorSpace) { CGColorSpaceRelease(sColorSpace); sColorSpace = NULL; }
+        sDecodeW = sDecodeH = 0;
     }
-
-    free(frameBuf);
-    if (sDecodeCtx) { CGContextRelease(sDecodeCtx); sDecodeCtx = NULL; }
-    if (sColorSpace) { CGColorSpaceRelease(sColorSpace); sColorSpace = NULL; }
-    sDecodeW = sDecodeH = 0;
-    [pool drain];
 }
 
 @end

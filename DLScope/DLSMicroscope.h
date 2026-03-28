@@ -9,7 +9,7 @@
 @end
 
 @interface DLSMicroscope : NSObject
-@property (nonatomic, assign) id<DLSMicroscopeDelegate> delegate;
+@property (nonatomic, weak) id<DLSMicroscopeDelegate> delegate;
 - (void)start;
 - (void)stop;
 @end

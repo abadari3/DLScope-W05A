@@ -16,20 +16,6 @@
     ALAssetsLibrary *_assetsLibrary;
 }
 
-- (void)dealloc {
-    [_microscope stop];
-    [_lastFrame release];
-    [_imageView release];
-    [_bottomBar release];
-    [_statusLabel release];
-    [_shutterButton release];
-    [_thumbnailButton release];
-    [_thumbnailImageView release];
-    [_microscope release];
-    [_assetsLibrary release];
-    [super dealloc];
-}
-
 - (void)viewDidLoad {
     [super viewDidLoad];
     self.view.backgroundColor = [UIColor blackColor];
@@ -74,13 +60,12 @@
     borderLine.autoresizingMask = UIViewAutoresizingFlexibleWidth;
     borderLine.backgroundColor = [UIColor colorWithWhite:0.25 alpha:1.0];
     [_bottomBar addSubview:borderLine];
-    [borderLine release];
 
     // --- Shutter button (center, 40pt) ---
     CGFloat shutterSize = 40.0;
     CGFloat shutterX = (bounds.size.width - shutterSize) / 2.0;
     CGFloat shutterY = (BOTTOM_BAR_HEIGHT - shutterSize) / 2.0;
-    _shutterButton = [[UIButton buttonWithType:UIButtonTypeCustom] retain];
+    _shutterButton = [UIButton buttonWithType:UIButtonTypeCustom];
     _shutterButton.frame = CGRectMake(shutterX, shutterY, shutterSize, shutterSize);
     _shutterButton.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin | UIViewAutoresizingFlexibleRightMargin;
     _shutterButton.layer.cornerRadius = shutterSize / 2.0;
@@ -97,12 +82,11 @@
     innerCircle.backgroundColor = [UIColor whiteColor];
     innerCircle.userInteractionEnabled = NO;
     [_shutterButton addSubview:innerCircle];
-    [innerCircle release];
 
     // --- Thumbnail button (bottom-left, 36pt) ---
     CGFloat thumbSize = 36.0;
     CGFloat thumbY = (BOTTOM_BAR_HEIGHT - thumbSize) / 2.0;
-    _thumbnailButton = [[UIButton buttonWithType:UIButtonTypeCustom] retain];
+    _thumbnailButton = [UIButton buttonWithType:UIButtonTypeCustom];
     _thumbnailButton.frame = CGRectMake(10, thumbY, thumbSize, thumbSize);
     _thumbnailButton.layer.cornerRadius = 4.0;
     _thumbnailButton.layer.borderWidth = 1.5;
@@ -155,28 +139,21 @@
             flash.alpha = 0.0;
         } completion:^(BOOL finished2) {
             [flash removeFromSuperview];
-            [flash release];
         }];
     }];
 
-    // Save via ALAssetsLibrary to get asset URL
-    UIImage *saveImage = [_lastFrame retain];
-    _thumbnailImageView.image = saveImage;
+    // Save via ALAssetsLibrary
+    _thumbnailImageView.image = _lastFrame;
 
-    [_assetsLibrary writeImageToSavedPhotosAlbum:[saveImage CGImage]
-                                     orientation:(ALAssetOrientation)saveImage.imageOrientation
+    [_assetsLibrary writeImageToSavedPhotosAlbum:[_lastFrame CGImage]
+                                     orientation:(ALAssetOrientation)_lastFrame.imageOrientation
                                  completionBlock:nil];
-
-    [saveImage release];
 }
 
 #pragma mark - DLSMicroscopeDelegate
 
 - (void)microscopeDidReceiveFrame:(UIImage *)image {
-    [image retain];
-    [_lastFrame release];
     _lastFrame = image;
-
     _imageView.image = image;
     if (!_statusLabel.hidden) {
         _statusLabel.hidden = YES;
