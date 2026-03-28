@@ -5,7 +5,7 @@ include $(THEOS)/makefiles/common.mk
 
 APPLICATION_NAME = DLScope
 DLScope_FILES = main.m DLSAppDelegate.m DLSViewController.m DLSMicroscope.m
-DLScope_OBJCFLAGS = -fobjc-arc
+DLScope_OBJCFLAGS = -fobjc-arc -O2
 DLScope_FRAMEWORKS = UIKit CoreGraphics Foundation QuartzCore AssetsLibrary SystemConfiguration
 
 include $(THEOS_MAKE_PATH)/application.mk
