@@ -5,6 +5,6 @@ include $(THEOS)/makefiles/common.mk
 
 APPLICATION_NAME = DLScope
 DLScope_FILES = main.m DLSAppDelegate.m DLSViewController.m DLSMicroscope.m
-DLScope_FRAMEWORKS = UIKit CoreGraphics ImageIO Foundation QuartzCore AssetsLibrary
+DLScope_FRAMEWORKS = UIKit CoreGraphics ImageIO Foundation QuartzCore AssetsLibrary SystemConfiguration
 
 include $(THEOS_MAKE_PATH)/application.mk

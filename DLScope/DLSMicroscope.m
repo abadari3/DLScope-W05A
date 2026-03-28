@@ -5,6 +5,7 @@
 #import <netinet/in.h>
 #import <arpa/inet.h>
 #import <unistd.h>
+#import <SystemConfiguration/CaptiveNetwork.h>
 
 #define MICROSCOPE_IP   "192.168.1.1"
 #define CMD_PORT        10005
@@ -85,6 +86,29 @@ static void sendEmptyToMicroscope(int sock, uint16_t port) {
     sendto(sock, NULL, 0, 0, (struct sockaddr *)&addr, sizeof(addr));
 }
 
+#pragma mark - WiFi check
+
+static BOOL isOnMicroscopeWiFi(void) {
+    CFArrayRef interfaces = CNCopySupportedInterfaces();
+    if (!interfaces) return NO;
+    BOOL found = NO;
+    CFIndex count = CFArrayGetCount(interfaces);
+    for (CFIndex i = 0; i < count; i++) {
+        CFStringRef iface = CFArrayGetValueAtIndex(interfaces, i);
+        CFDictionaryRef info = CNCopyCurrentNetworkInfo(iface);
+        if (info) {
+            CFStringRef ssid = CFDictionaryGetValue(info, kCNNetworkInfoKeySSID);
+            if (ssid && CFStringHasPrefix(ssid, CFSTR("MKL_WIFI_"))) {
+                found = YES;
+            }
+            CFRelease(info);
+        }
+        if (found) break;
+    }
+    CFRelease(interfaces);
+    return found;
+}
+
 #pragma mark - JPEG decoding (reusable context)
 
 // Persistent decode context — allocated once, reused every frame.
@@ -157,6 +181,10 @@ static UIImage *decodeJPEG(const uint8_t *bytes, size_t length) {
 
 - (void)start {
     _running = YES;
+
+    if (!isOnMicroscopeWiFi()) {
+        [self notifyStatus:@"Connect to MKL_WIFI network"];
+    }
 
     _cmdSock = createUDPSocket(0);
     _streamSock = createUDPSocket(STREAM_RX_PORT);
@@ -275,8 +303,12 @@ static UIImage *decodeJPEG(const uint8_t *bytes, size_t length) {
         ssize_t n = recvfrom(_streamSock, pktBuf, sizeof(pktBuf), 0, NULL, NULL);
 
         if (n < 0) {
-            // Timeout — re-register
-            [self notifyStatus:@"Timeout - reconnecting..."];
+            // Timeout — check WiFi and re-register
+            if (!isOnMicroscopeWiFi()) {
+                [self notifyStatus:@"Connect to MKL_WIFI network"];
+            } else {
+                [self notifyStatus:@"Timeout - reconnecting..."];
+            }
             sendToMicroscope(_cmdSock, makeCmd(0, 1, 1), CMD_PORT);
             sendToMicroscope(_cmdSock, makeCmd(1, 2, 1), CMD_PORT);
             sendToMicroscope(_cmdSock, makeStreamRegCmd(), STREAM_REG_PORT);
