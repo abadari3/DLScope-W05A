@@ -1,7 +1,7 @@
 Package: com.abadari3.dlscope
 Name: DLScope
 Depends: firmware (>= 6.0)
-Version: 2.0
+Version: 1.0
 Architecture: iphoneos-arm
 Description: W05A WiFi Microscope Viewer
 Maintainer: Ananda Badari
