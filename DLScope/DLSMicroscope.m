@@ -1,5 +1,4 @@
 #import "DLSMicroscope.h"
-#import <ImageIO/ImageIO.h>
 #import <CoreGraphics/CoreGraphics.h>
 #import <sys/socket.h>
 #import <netinet/in.h>
@@ -129,7 +128,8 @@ static void ensureDecodeContext(size_t w, size_t h) {
 }
 
 static UIImage *decodeJPEG(const uint8_t *bytes, size_t length) {
-    CGDataProviderRef provider = CGDataProviderCreateWithData(NULL, bytes, length, NULL);
+    NSData *data = [[NSData alloc] initWithBytes:bytes length:length];
+    CGDataProviderRef provider = CGDataProviderCreateWithCFData((__bridge CFDataRef)data);
     if (!provider) return nil;
 
     CGImageRef cgImage = CGImageCreateWithJPEGDataProvider(provider, NULL, false, kCGRenderingIntentDefault);
@@ -169,6 +169,7 @@ static UIImage *decodeJPEG(const uint8_t *bytes, size_t length) {
     uint8_t _lastSnapBtn;
     UIImage *_pendingFrame;
     BOOL _frameDispatched;
+    NSLock *_frameLock;
 }
 
 - (void)dealloc {
@@ -176,6 +177,7 @@ static UIImage *decodeJPEG(const uint8_t *bytes, size_t length) {
 }
 
 - (void)start {
+    _frameLock = [[NSLock alloc] init];
     _running = YES;
 
     if (!isOnMicroscopeWiFi()) {
@@ -188,6 +190,7 @@ static UIImage *decodeJPEG(const uint8_t *bytes, size_t length) {
 
     if (_cmdSock < 0 || _streamSock < 0 || _hbSock < 0) {
         [self notifyStatus:@"Failed to create sockets"];
+        [self stop];
         return;
     }
 
@@ -221,17 +224,20 @@ static UIImage *decodeJPEG(const uint8_t *bytes, size_t length) {
 }
 
 - (void)notifyFrame:(UIImage *)image {
-    // Pending frame slot: always keep only the latest frame.
-    // If main thread hasn't consumed the previous one, it gets replaced.
+    [_frameLock lock];
     _pendingFrame = image;
-
     if (!_frameDispatched) {
         _frameDispatched = YES;
+        [_frameLock unlock];
         dispatch_async(dispatch_get_main_queue(), ^{
+            [_frameLock lock];
             UIImage *latest = _pendingFrame;
             _frameDispatched = NO;
+            [_frameLock unlock];
             [self.delegate microscopeDidReceiveFrame:latest];
         });
+    } else {
+        [_frameLock unlock];
     }
 }
 
@@ -354,7 +360,10 @@ static UIImage *decodeJPEG(const uint8_t *bytes, size_t length) {
             }
 
             // Skip decode if main thread hasn't consumed the previous frame yet
-            if (_frameDispatched) {
+            [_frameLock lock];
+            BOOL dispatched = _frameDispatched;
+            [_frameLock unlock];
+            if (dispatched) {
                 frameLen = 0;
                 continue;
             }
